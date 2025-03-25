@@ -1,201 +1,238 @@
-"""
-Navigation Agent for handling form navigation.
-"""
+#!/usr/bin/env python3
+# Navigation Agent - Handles form navigation and submission
+
+import logging
 import time
-from typing import Dict, List, Any, Optional, Tuple
-from selenium.webdriver.remote.webelement import WebElement
-from loguru import logger
-from ..browser.browser_handler import BrowserHandler
-from ..config import get_config
+from typing import Optional
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+logger = logging.getLogger(__name__)
 
 class NavigationAgent:
     """
-    Agent for handling form navigation.
-    
-    This agent is responsible for detecting and interacting with
-    navigation elements like "Next" and "Submit" buttons.
+    The Navigation Agent is responsible for:
+    1. Detecting 'Next' and 'Submit' buttons in Google Forms
+    2. Navigating between pages of multi-page forms
+    3. Determining when the form is complete
     """
     
-    def __init__(self, browser_handler: BrowserHandler):
+    # Common button identifiers in Google Forms
+    NEXT_BUTTON_IDENTIFIERS = [
+        "//span[contains(text(), 'Next')]",
+        "//span[contains(text(), 'Continue')]",
+        "//div[contains(@role, 'button')][contains(., 'Next')]",
+        "//div[contains(@class, 'freebirdFormviewerViewNavigationButtons')]/div[2]",
+        "//div[contains(@class, 'appsMaterialWizButtonPaperbuttonLabel')][contains(text(), 'Next')]"
+    ]
+    
+    SUBMIT_BUTTON_IDENTIFIERS = [
+        "//span[contains(text(), 'Submit')]",
+        "//div[contains(@role, 'button')][contains(., 'Submit')]",
+        "//div[contains(@class, 'freebirdFormviewerViewNavigationButtons')]/div[2]",
+        "//div[contains(@class, 'appsMaterialWizButtonPaperbuttonLabel')][contains(text(), 'Submit')]"
+    ]
+    
+    COMPLETION_INDICATORS = [
+        "//div[contains(text(), 'Your response has been recorded')]",
+        "//div[contains(text(), 'Thanks for submitting')]",
+        "//div[contains(text(), 'Thank you for your response')]"
+    ]
+    
+    def __init__(self, form_handler):
         """
-        Initialize the navigation agent.
+        Initialize the Navigation Agent.
         
         Args:
-            browser_handler: Browser handler instance
+            form_handler: The FormHandler instance providing access to the Selenium WebDriver
         """
-        self.browser = browser_handler
-        self.element_finder = browser_handler.element_finder
-        self.retry_config = get_config("RETRY_CONFIG")
+        logger.info("Initializing Navigation Agent")
+        self.form_handler = form_handler
+        self.driver = form_handler.driver
+        self.next_page_attempts = 0
+        self.max_attempts = 3
     
-    def check_for_next_button(self) -> Optional[WebElement]:
+    def navigate_next(self) -> bool:
         """
-        Check if a "Next" button is present on the current page.
+        Attempt to navigate to the next page of the form.
         
         Returns:
-            Next button WebElement if found, None otherwise
+            Boolean indicating if navigation was successful
         """
-        logger.info("Checking for Next button")
-        return self.element_finder.find_next_button()
-    
-    def check_for_submit_button(self) -> Optional[WebElement]:
-        """
-        Check if a "Submit" button is present on the current page.
+        logger.debug("Attempting to navigate to next page")
         
-        Returns:
-            Submit button WebElement if found, None otherwise
-        """
-        logger.info("Checking for Submit button")
-        return self.element_finder.find_submit_button()
-    
-    def navigate_to_next_page(self) -> bool:
-        """
-        Navigate to the next page of the form.
-        
-        Returns:
-            True if navigation was successful, False otherwise
-        """
-        logger.info("Attempting to navigate to next page")
-        
-        # Try to find the Next button
-        next_button = self.check_for_next_button()
-        if not next_button:
-            logger.warning("Next button not found")
+        # First check if the form is already completed
+        if self.is_form_completed():
+            logger.info("Form already completed, no further navigation needed")
             return False
         
-        # Try to click the Next button
-        return self._click_navigation_button(next_button, "Next")
-    
-    def submit_form(self) -> bool:
-        """
-        Submit the form.
-        
-        Returns:
-            True if submission was successful, False otherwise
-        """
-        logger.info("Attempting to submit form")
-        
-        # Try to find the Submit button
-        submit_button = self.check_for_submit_button()
-        if not submit_button:
-            logger.warning("Submit button not found")
-            return False
-        
-        # Try to click the Submit button
-        result = self._click_navigation_button(submit_button, "Submit")
-        
-        if result:
-            # Wait for submission to complete
-            time.sleep(2)
-            
-            # Check if we're still on a form page (submission might have failed)
-            next_button = self.check_for_next_button()
-            submit_button = self.check_for_submit_button()
-            
-            if next_button or submit_button:
-                logger.warning("We're still on a form page after submission attempt")
-                return False
-        
-        return result
-    
-    def _click_navigation_button(self, button: WebElement, button_type: str) -> bool:
-        """
-        Click a navigation button with retries.
-        
-        Args:
-            button: Navigation button WebElement
-            button_type: Type of button ("Next" or "Submit")
-            
-        Returns:
-            True if click was successful, False otherwise
-        """
-        max_retries = self.retry_config.get("max_retries", 3)
-        retry_delay = self.retry_config.get("retry_delay", 1)
-        
-        for attempt in range(max_retries):
+        # Try to find the Submit button first - prioritize completing the form
+        submit_button = self._find_button(self.SUBMIT_BUTTON_IDENTIFIERS)
+        if submit_button:
+            logger.info("Found Submit button - this appears to be the last page")
             try:
-                logger.info(f"Clicking {button_type} button (attempt {attempt + 1}/{max_retries})")
+                # Add a short delay to ensure all answers are registered
+                time.sleep(1)
+                submit_button.click()
+                logger.info("Form submitted successfully")
                 
-                # Try using our utility method which tries both regular and JS clicks
-                if self.element_finder.click_element(button):
-                    logger.info(f"Successfully clicked {button_type} button")
-                    # Give the page time to update
-                    time.sleep(1)
-                    return True
+                # Wait for submission to complete
+                self._wait_for_form_completion()
+                return False  # Navigation is complete
                 
-                # If still here, the click failed
-                logger.warning(f"Failed to click {button_type} button")
-                
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
             except Exception as e:
-                logger.error(f"Error clicking {button_type} button: {str(e)}")
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
+                logger.error(f"Error submitting form: {str(e)}")
+                self.next_page_attempts += 1
+                if self.next_page_attempts >= self.max_attempts:
+                    logger.warning("Max submission attempts reached, assuming form is complete")
+                    return False
+                return True  # Try again next iteration
         
-        logger.error(f"Failed to click {button_type} button after {max_retries} attempts")
+        # If not on the last page, look for Next button
+        next_button = self._find_button(self.NEXT_BUTTON_IDENTIFIERS)
+        if next_button:
+            logger.info("Found Next button - navigating to next page")
+            try:
+                # Add a short delay to ensure all answers are registered
+                time.sleep(1)
+                next_button.click()
+                
+                # Wait for the next page to load
+                self._wait_for_page_load()
+                
+                # Reset attempts counter after successful navigation
+                self.next_page_attempts = 0
+                
+                # Indicate successful navigation to the next page
+                return True
+                
+            except Exception as e:
+                logger.error(f"Error navigating to next page: {str(e)}")
+                self.next_page_attempts += 1
+                if self.next_page_attempts >= self.max_attempts:
+                    logger.warning("Max navigation attempts reached, assuming form is complete")
+                    return False
+                return True  # Try again next iteration
+                
+        logger.warning("No Next or Submit button found")
         return False
     
-    def detect_form_completion(self) -> bool:
+    def is_form_completed(self) -> bool:
         """
-        Detect if the form has been completed.
+        Check if the form has been completed and submitted.
         
         Returns:
-            True if form appears to be completed, False otherwise
+            Boolean indicating if the form is completed
         """
-        # Check for common completion indicators
-        try:
-            # Look for common thank you messages
-            success_indicators = [
-                "//div[contains(text(), 'Thank you')]",
-                "//div[contains(text(), 'Your response has been recorded')]",
-                "//div[contains(text(), 'Form submitted')]",
-                "//div[contains(text(), 'successfully submitted')]",
-            ]
-            
-            for indicator in success_indicators:
-                element = self.element_finder.find_element(indicator)
-                if element:
+        # Look for completion messages
+        for indicator in self.COMPLETION_INDICATORS:
+            try:
+                element = self.driver.find_element(By.XPATH, indicator)
+                if element.is_displayed():
                     logger.info(f"Form completion detected: '{element.text}'")
                     return True
+            except NoSuchElementException:
+                continue
+        
+        # Check for common "Thank you" page URL patterns
+        current_url = self.driver.current_url
+        if "formResponse" in current_url or "closedform" in current_url:
+            logger.info("Form completion detected from URL")
+            return True
             
-            # If no "Next" or "Submit" buttons are found, and we previously 
-            # clicked Submit, we can assume the form is complete
-            next_button = self.check_for_next_button()
-            submit_button = self.check_for_submit_button()
+        return False
+    
+    def _find_button(self, identifiers):
+        """
+        Try to find a button using a list of possible identifiers.
+        
+        Args:
+            identifiers: List of XPATH identifiers to try
             
-            if not next_button and not submit_button:
-                logger.info("Form appears to be completed (no navigation buttons found)")
-                return True
+        Returns:
+            WebElement if found, None otherwise
+        """
+        for identifier in identifiers:
+            try:
+                element = self.driver.find_element(By.XPATH, identifier)
+                if element.is_displayed() and element.is_enabled():
+                    return element
+            except NoSuchElementException:
+                continue
+        
+        return None
+    
+    def _wait_for_page_load(self, timeout: int = 10) -> bool:
+        """
+        Wait for the page to load after clicking Next.
+        
+        Args:
+            timeout: Maximum time to wait in seconds
             
-            return False
-        except Exception as e:
-            logger.error(f"Error detecting form completion: {str(e)}")
+        Returns:
+            Boolean indicating if the page loaded successfully
+        """
+        try:
+            # Wait for a loading indicator to disappear or for new content
+            # Google Forms often has a loading animation we can look for
+            WebDriverWait(self.driver, timeout).until(
+                EC.invisibility_of_element_located((By.XPATH, "//div[contains(@class, 'freebirdFormviewerViewFormContentLoadingContainer')]"))
+            )
+            
+            # Additionally, wait for the new page content to be present
+            WebDriverWait(self.driver, timeout).until(
+                EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'freebirdFormviewerViewItemsItemItem')]"))
+            )
+            
+            # Add a small delay to ensure the page is fully loaded
+            time.sleep(0.5)
+            return True
+            
+        except TimeoutException:
+            logger.warning(f"Timeout waiting for page to load after {timeout} seconds")
             return False
     
-    def determine_next_action(self) -> str:
+    def _wait_for_form_completion(self, timeout: int = 15) -> bool:
         """
-        Determine the next navigation action to take.
+        Wait for the form submission to complete.
         
+        Args:
+            timeout: Maximum time to wait in seconds
+            
         Returns:
-            Action to take ("next", "submit", "complete", or "unknown")
+            Boolean indicating if the form completion was detected
         """
-        logger.info("Determining next navigation action")
-        
-        # Check if form appears to be completed
-        if self.detect_form_completion():
-            return "complete"
-        
-        # Check for Submit button first (if present, we're on the last page)
-        submit_button = self.check_for_submit_button()
-        if submit_button:
-            return "submit"
-        
-        # Check for Next button
-        next_button = self.check_for_next_button()
-        if next_button:
-            return "next"
-        
-        # If neither button is found and we're not on a completion page,
-        # something might be wrong
-        logger.warning("Could not determine navigation action")
-        return "unknown" 
+        try:
+            # Wait for any of the completion indicators
+            for indicator in self.COMPLETION_INDICATORS:
+                try:
+                    WebDriverWait(self.driver, timeout/len(self.COMPLETION_INDICATORS)).until(
+                        EC.visibility_of_element_located((By.XPATH, indicator))
+                    )
+                    logger.info("Form completion confirmed")
+                    return True
+                except TimeoutException:
+                    continue
+                
+            # Also check for URL change indicating completion
+            start_url = self.driver.current_url
+            
+            def url_changed(driver):
+                return driver.current_url != start_url
+                
+            WebDriverWait(self.driver, timeout).until(url_changed)
+            
+            # Verify the new URL is consistent with completion
+            current_url = self.driver.current_url
+            if "formResponse" in current_url or "closedform" in current_url:
+                logger.info("Form completion confirmed via URL change")
+                return True
+                
+            logger.warning("URL changed but not to a known completion URL")
+            return False
+            
+        except TimeoutException:
+            logger.warning(f"Timeout waiting for form completion after {timeout} seconds")
+            return False 

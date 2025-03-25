@@ -1,437 +1,201 @@
-"""
-Reasoning Agent for extracting and classifying form questions.
-"""
-from typing import Dict, List, Any, Optional, Tuple
-from selenium.webdriver.remote.webelement import WebElement
-from loguru import logger
-from ..browser.browser_handler import BrowserHandler
-from ..config import get_config
-from bs4 import BeautifulSoup
-import re
+#!/usr/bin/env python3
+# Reasoning Agent - Responsible for analyzing questions and determining strategies
+
+import logging
+from typing import Dict, Tuple, Any, List
+
+logger = logging.getLogger(__name__)
 
 class ReasoningAgent:
     """
-    Agent for extracting and classifying form questions.
-    
-    This agent is responsible for analyzing the form structure, extracting
-    questions, and determining the appropriate question type.
+    The Reasoning Agent is responsible for:
+    1. Analyzing and classifying form questions
+    2. Determining required vs optional fields
+    3. Determining appropriate answering strategies
     """
     
-    def __init__(self, browser_handler: BrowserHandler):
+    # Question type constants
+    TYPE_TEXT = "text"
+    TYPE_PARAGRAPH = "paragraph"
+    TYPE_MULTIPLE_CHOICE = "multiple_choice"
+    TYPE_CHECKBOX = "checkbox"
+    TYPE_DROPDOWN = "dropdown"
+    TYPE_UNKNOWN = "unknown"
+    
+    def __init__(self):
+        """Initialize the Reasoning Agent."""
+        logger.info("Initializing Reasoning Agent")
+    
+    def analyze_question(self, question: Dict[str, Any]) -> Tuple[str, bool]:
         """
-        Initialize the reasoning agent.
+        Analyze a question and determine its type and if it's required.
         
         Args:
-            browser_handler: Browser handler instance
-        """
-        self.browser = browser_handler
-        self.element_finder = browser_handler.element_finder
-        self.question_types = get_config("QUESTION_TYPES")
-    
-    def extract_questions(self, page_source: str) -> List[Dict[str, Any]]:
-        """
-        Extract all questions from the current form page.
-        
-        Args:
-            page_source: HTML source of the current page
+            question: Dictionary containing question data including element, text, etc.
             
         Returns:
-            List of question dictionaries with structure:
-            {
-                'text': str,           # Question text
-                'type': str,           # Question type (text, multiple_choice, etc.)
-                'options': List[str],  # Options for multiple choice/checkbox questions
-                'elements': List       # Associated WebElements for interacting with the question
-            }
+            Tuple containing (question_type, is_required)
         """
-        logger.info("Extracting questions from current form page")
+        logger.debug(f"Analyzing question: {question['text']}")
         
-        # Get all question texts
-        question_texts = self.element_finder.get_question_texts()
+        # Extract question element and text
+        element = question['element']
+        question_text = question['text']
         
-        # If no question texts found, try alternative approach
-        if not question_texts:
-            logger.warning("No question texts found using standard selectors, trying alternative approach")
-            return self._extract_questions_by_elements()
-        
-        # Process each question
-        questions = []
-        for i, question_text_elem in enumerate(question_texts):
-            try:
-                # Extract question text
-                question_text = question_text_elem.text.strip()
-                if not question_text:
-                    continue
-                
-                # Determine question type and associated elements
-                q_type, elements, options = self._classify_question(question_text_elem)
-                
-                # Create question dictionary
-                question = {
-                    'text': question_text,
-                    'type': q_type,
-                    'options': options,
-                    'elements': elements
-                }
-                
-                questions.append(question)
-                logger.debug(f"Extracted question: {question['text'][:50]}... (Type: {q_type})")
-            except Exception as e:
-                logger.error(f"Error extracting question {i}: {str(e)}")
-        
-        logger.info(f"Extracted {len(questions)} questions from form")
-        return questions
-    
-    def _extract_questions_by_elements(self) -> List[Dict[str, Any]]:
-        """
-        Alternative question extraction method based on form elements.
-        
-        Returns:
-            List of question dictionaries
-        """
-        questions = []
-        
-        # Process text inputs
-        text_inputs = self.element_finder.get_text_inputs()
-        for i, input_elem in enumerate(text_inputs):
-            try:
-                # Look for a label or question text near this input
-                label = self._find_label_for_element(input_elem)
-                q_type = self.question_types["TEXT"]
-                question = {
-                    'text': label or f"Text Question {i+1}",
-                    'type': q_type,
-                    'options': [],
-                    'elements': [input_elem]
-                }
-                questions.append(question)
-            except Exception as e:
-                logger.error(f"Error processing text input {i}: {str(e)}")
-        
-        # Process text areas
-        text_areas = self.element_finder.get_text_areas()
-        for i, textarea_elem in enumerate(text_areas):
-            try:
-                label = self._find_label_for_element(textarea_elem)
-                q_type = self.question_types["PARAGRAPH"]
-                question = {
-                    'text': label or f"Paragraph Question {i+1}",
-                    'type': q_type,
-                    'options': [],
-                    'elements': [textarea_elem]
-                }
-                questions.append(question)
-            except Exception as e:
-                logger.error(f"Error processing textarea {i}: {str(e)}")
-        
-        # Process radio buttons (group by proximity)
-        radio_options = self.element_finder.get_radio_options()
-        if radio_options:
-            try:
-                radio_groups = self._group_elements_by_question(radio_options)
-                for i, group in enumerate(radio_groups):
-                    if group:
-                        label = self._find_label_for_element(group[0])
-                        options = [self._get_option_text(opt) for opt in group]
-                        question = {
-                            'text': label or f"Multiple Choice Question {i+1}",
-                            'type': self.question_types["MULTIPLE_CHOICE"],
-                            'options': options,
-                            'elements': group
-                        }
-                        questions.append(question)
-            except Exception as e:
-                logger.error(f"Error processing radio buttons: {str(e)}")
-        
-        # Process checkboxes
-        checkbox_options = self.element_finder.get_checkbox_options()
-        if checkbox_options:
-            try:
-                checkbox_groups = self._group_elements_by_question(checkbox_options)
-                for i, group in enumerate(checkbox_groups):
-                    if group:
-                        label = self._find_label_for_element(group[0])
-                        options = [self._get_option_text(opt) for opt in group]
-                        question = {
-                            'text': label or f"Checkbox Question {i+1}",
-                            'type': self.question_types["CHECKBOX"],
-                            'options': options,
-                            'elements': group
-                        }
-                        questions.append(question)
-            except Exception as e:
-                logger.error(f"Error processing checkboxes: {str(e)}")
-        
-        # Process dropdowns
-        dropdowns, options = self.element_finder.get_dropdown_elements()
-        for i, dropdown in enumerate(dropdowns):
-            try:
-                label = self._find_label_for_element(dropdown)
-                dropdown_options = []
-                for opt in options:
-                    opt_text = self._get_option_text(opt)
-                    if opt_text:
-                        dropdown_options.append(opt_text)
-                
-                question = {
-                    'text': label or f"Dropdown Question {i+1}",
-                    'type': self.question_types["DROPDOWN"],
-                    'options': dropdown_options,
-                    'elements': [dropdown]
-                }
-                questions.append(question)
-            except Exception as e:
-                logger.error(f"Error processing dropdown {i}: {str(e)}")
-        
-        logger.info(f"Extracted {len(questions)} questions using element-based approach")
-        return questions
-    
-    def _classify_question(self, question_elem: WebElement) -> Tuple[str, List[WebElement], List[str]]:
-        """
-        Classify a question's type based on its associated elements.
-        
-        Args:
-            question_elem: Question text WebElement
-            
-        Returns:
-            Tuple of (question_type, associated_elements, options)
-        """
-        # Search for related elements near the question
-        question_div = self._find_parent_container(question_elem)
-        if not question_div:
-            question_div = question_elem
-        
-        # Check for text inputs
-        text_inputs = self.element_finder.find_elements(
-            ".//input[@type='text' or @type='email' or @type='tel' or @type='number']",
-            question_div
-        )
-        if text_inputs:
-            return self.question_types["TEXT"], text_inputs, []
-        
-        # Check for textareas
-        textareas = self.element_finder.find_elements(".//textarea", question_div)
-        if textareas:
-            return self.question_types["PARAGRAPH"], textareas, []
-        
-        # Check for radio buttons
-        radio_buttons = self.element_finder.find_elements(".//div[@role='radio']", question_div)
-        if radio_buttons:
-            options = [self._get_option_text(rb) for rb in radio_buttons]
-            return self.question_types["MULTIPLE_CHOICE"], radio_buttons, options
-        
-        # Check for checkboxes
-        checkboxes = self.element_finder.find_elements(".//div[@role='checkbox']", question_div)
-        if checkboxes:
-            options = [self._get_option_text(cb) for cb in checkboxes]
-            return self.question_types["CHECKBOX"], checkboxes, options
-        
-        # Check for dropdowns
-        dropdowns = self.element_finder.find_elements(".//div[@role='listbox']", question_div)
-        if dropdowns:
-            # Get dropdown options
-            dropdown_options = self.element_finder.find_elements(".//div[@role='option']", question_div)
-            options = [self._get_option_text(opt) for opt in dropdown_options]
-            return self.question_types["DROPDOWN"], dropdowns, options
-        
-        # If no specific elements found, default to unknown
-        return self.question_types["UNKNOWN"], [], []
-    
-    def _find_parent_container(self, element: WebElement) -> Optional[WebElement]:
-        """
-        Find the parent container element for a question.
-        
-        Args:
-            element: WebElement to find parent for
-            
-        Returns:
-            Parent container WebElement or None if not found
-        """
-        try:
-            # Try to find parent based on common Google Forms classes
-            parent = self.browser.execute_script(
-                """
-                function findParentContainer(el) {
-                    // Try to find parent with classes often used in forms
-                    let current = el;
-                    while (current && current.tagName !== 'BODY') {
-                        // Look for common container classes
-                        if (current.classList.contains('freebirdFormviewerComponentsQuestionBaseRoot') ||
-                            current.classList.contains('freebirdFormviewerViewNumberedItemContainer')) {
-                            return current;
-                        }
-                        current = current.parentElement;
-                    }
-                    return null;
-                }
-                return findParentContainer(arguments[0]);
-                """, 
-                element
-            )
-            return parent
-        except Exception as e:
-            logger.debug(f"Error finding parent container: {str(e)}")
-            return None
-    
-    def _find_label_for_element(self, element: WebElement) -> str:
-        """
-        Find a label or description for an input element.
-        
-        Args:
-            element: WebElement to find label for
-            
-        Returns:
-            Label text or empty string if not found
-        """
-        try:
-            # Try various approaches to find a label
-            label = self.browser.execute_script(
-                """
-                function findLabel(el) {
-                    // Try to find the label using various strategies
-                    
-                    // 1. Check for aria-labelledby
-                    let labelledby = el.getAttribute('aria-labelledby');
-                    if (labelledby) {
-                        let labelEl = document.getElementById(labelledby);
-                        if (labelEl && labelEl.textContent.trim()) {
-                            return labelEl.textContent.trim();
-                        }
-                    }
-                    
-                    // 2. Check for associated label element
-                    if (el.id) {
-                        let label = document.querySelector(`label[for="${el.id}"]`);
-                        if (label && label.textContent.trim()) {
-                            return label.textContent.trim();
-                        }
-                    }
-                    
-                    // 3. Look for nearby heading elements
-                    let current = el;
-                    while (current && current.tagName !== 'BODY') {
-                        // Check for heading elements that are siblings
-                        let parent = current.parentElement;
-                        if (parent) {
-                            for (let child of parent.children) {
-                                if (/^H[1-6]$/.test(child.tagName) || 
-                                    child.classList.contains('freebirdFormviewerComponentsQuestionBaseTitle')) {
-                                    return child.textContent.trim();
-                                }
-                            }
-                        }
-                        current = parent;
-                    }
-                    
-                    // 4. Check preceding siblings for text
-                    current = el;
-                    while (current && current.previousElementSibling) {
-                        let prev = current.previousElementSibling;
-                        if (prev.textContent.trim() && !prev.querySelector('input, select, textarea')) {
-                            return prev.textContent.trim();
-                        }
-                        current = prev;
-                    }
-                    
-                    return '';
-                }
-                return findLabel(arguments[0]);
-                """, 
-                element
-            )
-            return label or ""
-        except Exception as e:
-            logger.debug(f"Error finding label: {str(e)}")
-            return ""
-    
-    def _get_option_text(self, option_element: WebElement) -> str:
-        """
-        Get the text content of an option element.
-        
-        Args:
-            option_element: Option WebElement
-            
-        Returns:
-            Option text
-        """
-        try:
-            # Try getting text directly
-            text = option_element.text.strip()
-            if text:
-                return text
-            
-            # If no text, try getting from child elements
-            option_text = self.browser.execute_script(
-                """
-                function getOptionText(el) {
-                    // Try to find text in specific child elements
-                    const textEl = el.querySelector('.docssharedWizToggleLabeledContent') || 
-                                  el.querySelector('.quantumWizTogglePaperradioOffRadio') ||
-                                  el.querySelector('[role="radio"]') ||
-                                  el.querySelector('[role="checkbox"]');
-                    
-                    if (textEl && textEl.textContent.trim()) {
-                        return textEl.textContent.trim();
-                    }
-                    
-                    // Get all text nodes within the element
-                    let text = '';
-                    for (let child of el.childNodes) {
-                        if (child.nodeType === 3) { // Text node
-                            text += child.textContent.trim();
-                        }
-                    }
-                    
-                    return text || 'Option';
-                }
-                return getOptionText(arguments[0]);
-                """, 
-                option_element
-            )
-            return option_text or "Option"
-        except Exception as e:
-            logger.debug(f"Error getting option text: {str(e)}")
-            return "Option"
-    
-    def _group_elements_by_question(self, elements: List[WebElement]) -> List[List[WebElement]]:
-        """
-        Group form elements by their associated questions.
-        
-        Args:
-            elements: List of WebElements to group
-            
-        Returns:
-            List of element groups
-        """
-        if not elements:
-            return []
+        # Default values
+        question_type = self.TYPE_UNKNOWN
+        is_required = False
         
         try:
-            # Get y-coordinates of elements
-            y_positions = []
-            for element in elements:
-                location = element.location
-                y_positions.append(location.get('y', 0))
+            # Detect if question is required
+            # In Google Forms, required questions typically have an asterisk or special class
+            is_required = '*' in question_text or self._check_required_class(element)
             
-            # Group elements by proximity
-            groups = []
-            current_group = [elements[0]]
+            # Analyze question type based on HTML structure
+            question_type = self._detect_question_type(element, question)
             
-            for i in range(1, len(elements)):
-                # If this element is close to the previous one, add to current group
-                # Otherwise start a new group
-                if abs(y_positions[i] - y_positions[i-1]) < 50:
-                    current_group.append(elements[i])
-                else:
-                    if current_group:
-                        groups.append(current_group)
-                    current_group = [elements[i]]
+            logger.debug(f"Question type determined as: {question_type}, Required: {is_required}")
             
-            # Add the last group
-            if current_group:
-                groups.append(current_group)
-            
-            return groups
         except Exception as e:
-            logger.error(f"Error grouping elements: {str(e)}")
-            return [elements]  # Return all elements as a single group on error 
+            logger.error(f"Error analyzing question '{question_text}': {str(e)}")
+        
+        return question_type, is_required
+    
+    def _detect_question_type(self, element, question: Dict[str, Any]) -> str:
+        """
+        Detect the type of question based on the element's structure.
+        
+        Args:
+            element: The HTML element representing the question
+            question: The question dictionary with additional data
+            
+        Returns:
+            String representing the question type
+        """
+        # Check for common Google Form input patterns
+        
+        # If question has radio buttons, it's multiple choice
+        if self._has_element_type(element, "radio"):
+            return self.TYPE_MULTIPLE_CHOICE
+            
+        # If question has checkboxes, it's checkbox type
+        elif self._has_element_type(element, "checkbox"):
+            return self.TYPE_CHECKBOX
+            
+        # If question has a select/dropdown element
+        elif self._has_element_type(element, "select"):
+            return self.TYPE_DROPDOWN
+            
+        # If question has a textarea, it's paragraph type
+        elif self._has_element_type(element, "textarea"):
+            return self.TYPE_PARAGRAPH
+            
+        # If question has a short text input
+        elif self._has_element_type(element, "text") or self._has_element_type(element, "input"):
+            # Check if it's a short answer by looking at size/class
+            if self._is_short_answer(element):
+                return self.TYPE_TEXT
+            else:
+                return self.TYPE_PARAGRAPH
+                
+        # Default to unknown if type couldn't be determined
+        return self.TYPE_UNKNOWN
+    
+    def _check_required_class(self, element) -> bool:
+        """
+        Check if the element has classes indicating it's required.
+        
+        Args:
+            element: The HTML element
+            
+        Returns:
+            Boolean indicating if the question is required
+        """
+        # Google Forms typically uses specific classes for required questions
+        # This is a simplified implementation - actual implementation would need to check
+        # specific class names used in Google Forms
+        try:
+            # Check for common required indicators in class names
+            class_name = element.get_attribute("class")
+            required_indicators = ["required", "mandatory", "freebirdFormviewerViewItemsItemRequiredAsterisk"]
+            
+            if class_name:
+                for indicator in required_indicators:
+                    if indicator in class_name:
+                        return True
+                
+            # Check for the asterisk in nearby elements
+            # In Google Forms, required questions often have an asterisk in a child element
+            asterisk_elements = element.find_elements_by_xpath(".//*[contains(text(), '*')]")
+            if asterisk_elements:
+                return True
+                
+        except Exception as e:
+            logger.warning(f"Error checking if field is required: {str(e)}")
+            
+        return False
+
+    def _has_element_type(self, parent_element, element_type: str) -> bool:
+        """
+        Check if the parent element contains child elements of the specified type.
+        
+        Args:
+            parent_element: The parent HTML element
+            element_type: The type of element to look for (input, select, etc.)
+            
+        Returns:
+            Boolean indicating if the element type was found
+        """
+        try:
+            # For input elements, check the type attribute
+            if element_type in ["radio", "checkbox", "text"]:
+                elements = parent_element.find_elements_by_xpath(f".//input[@type='{element_type}']")
+            else:
+                # For other elements, check the tag name
+                elements = parent_element.find_elements_by_xpath(f".//{element_type}")
+                
+            return len(elements) > 0
+        except Exception as e:
+            logger.warning(f"Error checking for element type {element_type}: {str(e)}")
+            return False
+    
+    def _is_short_answer(self, element) -> bool:
+        """
+        Determine if a text input is a short answer or paragraph.
+        
+        Args:
+            element: The HTML element
+            
+        Returns:
+            Boolean indicating if it's a short answer (True) or paragraph (False)
+        """
+        try:
+            # Check for size attributes
+            size_attr = element.get_attribute("size")
+            maxlength_attr = element.get_attribute("maxlength")
+            class_name = element.get_attribute("class")
+            
+            # If input has small size or maxlength, it's likely a short answer
+            if size_attr and int(size_attr) < 50:
+                return True
+                
+            if maxlength_attr and int(maxlength_attr) < 200:
+                return True
+                
+            # Check class name for indicators
+            if class_name:
+                short_indicators = ["short", "small", "freebirdFormviewerViewItemsTextShortText"]
+                for indicator in short_indicators:
+                    if indicator in class_name:
+                        return True
+                
+                paragraph_indicators = ["paragraph", "long", "freebirdFormviewerViewItemsTextLongText"]
+                for indicator in paragraph_indicators:
+                    if indicator in class_name:
+                        return False
+                
+        except Exception as e:
+            logger.warning(f"Error determining if input is short answer: {str(e)}")
+            
+        # Default to short answer if can't determine
+        return True 

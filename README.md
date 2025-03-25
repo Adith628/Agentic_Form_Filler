@@ -1,94 +1,85 @@
-# Agentic AI Google Form Filler
+# Agentic Form Filler for Google Forms
 
-This system uses an Agentic AI architecture to autonomously fill out Google Forms. It leverages Cohere AI for answer generation and implements a modular multi-agent approach for form interaction.
-
-## Architecture Overview
-
-The system consists of three specialized AI agents:
-
-1. **Reasoning Agent** - Extracts questions and classifies their types
-2. **Answer Generation Agent** - Generates contextually appropriate responses using Cohere AI
-3. **Navigation Agent** - Handles form navigation and submission
+An intelligent AI agent system that automatically fills out Google Forms using an agentic architecture.
 
 ## Features
 
-- **Intelligent Question Extraction** - Dynamically identifies form elements and extracts questions
-- **Question Type Classification** - Automatically detects text, multiple-choice, checkbox, and dropdown questions
-- **AI-Powered Response Generation** - Uses Cohere AI to generate contextually relevant answers
-- **Multi-Page Form Navigation** - Detects and handles multi-page forms seamlessly
-- **Comprehensive Logging** - Logs all actions and responses for tracking
-- **Error Handling** - Robust error recovery for browser automation issues
-- **Headless Operation** - Can run invisibly for better performance
+- **Extracts questions** from Google Forms dynamically
+- **Identifies question types** (text, paragraph, multiple-choice, checkbox, dropdown)
+- **Generates relevant answers** using Cohere AI
+- **Navigates multi-page forms** automatically
+- **Handles form submission**
+- **Comprehensive logging** for debugging and analysis
 
-## Prerequisites
+## Architecture
 
-- Python 3.8 or higher
-- Chrome browser installed
-- Cohere API key
-- ChromeDriver (automatically managed)
+The system implements a modular agentic architecture with three specialized agents:
+
+1. **Reasoning Agent**: Analyzes form questions, determines question types, and decides on answering strategies
+2. **Answer Generation Agent**: Generates appropriate responses using Cohere AI
+3. **Navigation Agent**: Handles form navigation and submission
+
+## Requirements
+
+- Python 3.8+
+- Chrome browser
+- ChromeDriver compatible with your Chrome version
+- Cohere API key (optional, falls back to mock responses if not provided)
 
 ## Installation
 
-1. Clone this repository or download the files
-2. Install the required packages:
-   ```bash
+1. Clone this repository:
+
+   ```
+   git clone https://github.com/yourusername/agentic-form-filler.git
+   cd agentic-form-filler
+   ```
+
+2. Install dependencies:
+
+   ```
    pip install -r requirements.txt
    ```
 
-## Configuration
+3. Set up your Cohere API key (optional):
 
-1. Create a `.env` file with your Cohere API key:
    ```
-   COHERE_API_KEY=your_api_key_here
+   export COHERE_API_KEY="your-api-key-here"
    ```
-2. Modify the configuration in `config.py` if needed.
+
+   For Windows:
+
+   ```
+   set COHERE_API_KEY=your-api-key-here
+   ```
 
 ## Usage
 
-Run the script with:
+Run the form filler on a Google Form URL:
 
-```bash
-python main.py --form-url "https://forms.gle/your-form-url"
+```
+python main.py https://docs.google.com/forms/d/e/your-form-id/viewform
 ```
 
-Optional arguments:
+### Options
 
-- `--headless` - Run in headless mode (default: True)
-- `--submissions` - Number of submissions to make (default: 1)
-- `--debug` - Enable debug logging (default: False)
+- By default, the system runs in non-headless mode so you can see the browser automation in action
+- To run in headless mode, modify the `headless` parameter in `main.py`
 
-## File Structure
+## Logs
 
-- `main.py` - Entry point
-- `agents/` - Contains the agent implementations
-  - `reasoning_agent.py` - For question extraction and classification
-  - `answer_agent.py` - For generating responses using Cohere
-  - `navigation_agent.py` - For form navigation
-- `browser/` - Browser automation code
-  - `browser_handler.py` - Selenium wrapper
-- `utils/` - Utility functions
-  - `logger.py` - Logging setup
-  - `element_finder.py` - Helpers for finding form elements
-- `config.py` - Configuration settings
+Logs are stored in the `logs` directory with timestamped filenames.
 
-## How It Works
+## Customization
 
-1. The system loads the Google Form in a browser
-2. The **Reasoning Agent** extracts questions and determines their types
-3. For each question:
-   - The **Answer Generation Agent** creates an appropriate response
-   - The response is filled into the form
-4. The **Navigation Agent** detects and clicks "Next" or "Submit" buttons
-5. The process repeats until the form is completed and submitted
+- Modify the agents to fit your specific use cases
+- Adjust the Cohere API parameters in `answer_agent.py` to generate different styles of responses
+- Add additional question type detection in `reasoning_agent.py`
 
-## Example
+## License
 
-```python
-from agentic_form_filler import FormFiller
+MIT
 
-# Initialize the form filler
-filler = FormFiller(form_url="https://forms.gle/your-form-url")
+## Disclaimer
 
-# Fill out and submit the form
-filler.run()
-```
+This tool is for educational and research purposes only. Always respect websites' terms of service and robots.txt files. Do not use this tool to submit spam or inappropriate content to forms.
