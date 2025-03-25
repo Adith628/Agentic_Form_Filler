@@ -1,0 +1,6 @@
+selenium>=4.15.2
+cohere>=4.32
+webdriver-manager>=4.0.1
+urllib3<2.0.0
+typing-extensions>=4.0.0
+loguru>=0.7.0 
